@@ -16,23 +16,24 @@ ICMP_CODE = socket.getprotobyname('icmp')
 UDP_CODE = socket.getprotobyname('udp')
 
 class ICMPPacket:
-    def __init__(self):
-        self.type = 8#type
-        self.code = 0#code
+    def __init__(self, type, code):
+        self.type = type
+        self.code = code
 
     def computeChecksum():
-        #Hey
         return
+    
     def getHeader(self, id):
         # Type (8), code(8), checksum(16), id(16), sequence(16)
-        return struct.pack("bbHHh", self.type, self.code, 0, id, 0)
+        icmpHeader = struct.pack("bbHHh", self.type, self.code, 0, id, 0)
+        return icmpHeader
 
     def fill():
         # Data will be stored in ICMP and DNS packets differently, so use fill methods specific to packet type
         return
     
 class DNSPacket:
-    def __init__(id, code):
+    def __init__(self, id, code):
         self.type = type
         self.code = code
         self.QR = 0
@@ -40,11 +41,14 @@ class DNSPacket:
     def computeChecksum():
         return
         
-    def getHeader(id):
+    def getHeader(self, id):
         # ID (16), QR(1), OpCode(4), AA(1), TC(1), RD(1), RA(1), Z(1), RCode(16), QDCount(16), ANCount(16), NSCount(16), ARCount(16)
-        # flags = self.QR << 15
         # All flags are 0 so we can just use an unsigned short (16 bytes) of 0
-        return struct.pack("HHHHHH", id, 0, 1, 0, 0, 0)
+        # DNS uses UDP so create UDP header first
+    
+        udpHeader = struct.pack("HHHH", 60123, 53, 32, 0)
+        dnsHeader = struct.pack("HHHHHH", id, 0, 1, 0, 0, 0)
+        return udpHeader + dnsHeader
 
     def fill():
         # Data will be stored in ICMP and DNS packets differently, so use fill methods specific to packet type
@@ -64,10 +68,10 @@ def createICMPPacket(id):
 
 def createDNSPacket(id):
     dnsPacket = DNSPacket(0, 0)
-    dnsHeader = dnsPacket.getHeader(1)
+    dnsUdpHeader = dnsPacket.getHeader(1)
     data = stringToBin("hello")
-    
-    return dnsHeader + data
+
+    return dnsUdpHeader + data
 
 def getNextChunk(sb, cl):
     global startByte
@@ -84,10 +88,12 @@ def getNextChunk(sb, cl):
     return chunk
 
 def sendStartOfFile():
-    createPacket(1)
+    #createPacket(1)
+    return
     
 def sendEndOfFile():
-    createPacket(2)
+    #createPacket(2)
+    return
     
 def stringToBin(s):
     b = ''.join(format(ord(x), 'b') for x in s)
@@ -115,7 +121,7 @@ def do_one(dest_addr, timeout=1):
 
     """
     try:
-        my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, ICMP_CODE)
+        my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, UDP_CODE)
     except socket.error as e:
         #if e.errno in ERROR_DESCR:
             # Operation not permitted
@@ -129,7 +135,7 @@ def do_one(dest_addr, timeout=1):
     # we have to sure that our packet id is not greater than that.
     packet_id = int((id(timeout) * random.random()) % 65535)
     #packet = createPacket(packet_id)
-    packet = createICMPPacket(0)
+    packet = createDNSPacket(0)
     while packet:
         # The icmp protocol does not use a port, but the function
         # below expects it, so we just give it a dummy port.
@@ -141,4 +147,5 @@ def do_one(dest_addr, timeout=1):
     return
 
 init()
+do_one("8.8.8.8")
     
