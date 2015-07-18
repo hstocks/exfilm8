@@ -46,8 +46,8 @@ class DNSPacket:
         # All flags are 0 so we can just use an unsigned short (16 bytes) of 0
         # DNS uses UDP so create UDP header first
     
-        udpHeader = struct.pack("HHHH", 60123, 53, 32, 0)
-        dnsHeader = struct.pack("HHHHHH", id, 0, 1, 0, 0, 0)
+        udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(53), socket.htons(40), 0)
+        dnsHeader = struct.pack("HHHHHH", socket.htons(id), 0, socket.htons(1), 0, 0, 0)
         return udpHeader + dnsHeader
 
     def fill():
@@ -69,10 +69,17 @@ def createICMPPacket(id):
 def createDNSPacket(id):
     dnsPacket = DNSPacket(0, 0)
     dnsUdpHeader = dnsPacket.getHeader(1)
-    data = stringToBin("hello")
+    a = stringToBin(stringToDNSQuery("www.google.com"))
+    data = struct.pack("HH", socket.htons(1), socket.htons(1))
+    return dnsUdpHeader + a + data
 
-    return dnsUdpHeader + data
-
+def stringToDNSQuery(s):
+    labels = s.split(".")
+    output = ""
+    for i in range(len(labels)):
+        output += str(len(labels[i])) + labels[i]
+    output += '0' # Add labels terminator
+    return output
 def getNextChunk(sb, cl):
     global startByte
     chunk = b''
@@ -96,7 +103,18 @@ def sendEndOfFile():
     return
     
 def stringToBin(s):
-    b = ''.join(format(ord(x), 'b') for x in s)
+    b = bytearray()
+    for i in s:
+        if i.isdigit() != True:
+            b.append(ord(i))
+        else:
+            b.append(int(i))
+
+    # Convert bytes to bin endian
+    for i in b:
+        if isinstance(i, int) != True:
+            i = socket.htons(i)
+        print(i)
     return b
   
 def readFile(name, mode):
