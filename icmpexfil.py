@@ -236,7 +236,7 @@ def createDNSPacket(src, dst):
     else:
         # Adjust chunk length accordingly
         for i in range(0, 4):
-            chunkLength = math.floor(random.random() * 30)
+            chunkLength = math.floor(random.random() * 62) + 1
             data = getNextChunk(startByte, chunkLength)
             #data = base64.b32encode(data)
             data = len(data).to_bytes(1, "little") + data

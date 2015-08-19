@@ -40,6 +40,7 @@ def parseDNSPacket(data):
     labelLen = 0
     labelProgress = 0
     readingLabel = False
+
     for i in range(0, len(data)):
         if readingLabel:
             buf += data[i].to_bytes(1, "little")
