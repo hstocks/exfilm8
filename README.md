@@ -1,11 +1,11 @@
 # exfilm8
 
 ##Command and control commands
-- rempwd 												– Print the current directory
+- rempwd 											– Print the current directory
 - remls												– List files in the current directory
 - remcd <path>										– Change the current directory
 - showopts 											– Display a list of available options and values
-- setopt <option> <value>								– Set an option
+- setopt <option> <value>							– Set an option
 - exfil [-s | -f | -p <n>] [-m | -i | -d] filename 	– Start exfiltration of specified file
 
 ##Exfil options
@@ -18,10 +18,8 @@
 
 
 ##How to run
-python3 client.py
-python3 server.py
+1. python3 client.py
+2. python3 server.py
 
-I don't think you need to use sudo, can't remember and cba to start VM.
-
-Files will be put in to directory 'output' directory
+Exfiltrated files will be put in to the 'output' directory
 

