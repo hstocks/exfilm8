@@ -1,4 +1,4 @@
-# exfilm8
+#exfilm8
 
 ##Command and control commands
 - rempwd 											– Print the current directory
@@ -7,6 +7,7 @@
 - showopts 											– Display a list of available options and values
 - setopt <option> <value>							– Set an option
 - exfil [-s | -f | -p <n>] [-m | -i | -d] filename 	– Start exfiltration of specified file
+- exit, quit, close									- Close exfilm8
 
 ##Exfil options
 - -s						- Stealth mode, default
@@ -21,5 +22,5 @@
 1. python3 client.py
 2. python3 server.py
 
-Exfiltrated files will be put in to the 'output' directory
+Exfiltrated files will be put in to the directory specified in 'outputDirectory' directory
 

