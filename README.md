@@ -8,7 +8,7 @@
 | remcd <path> | Change the current directory |
 | showopts | Display a list of available options and values |
 | setopt <option> <value> | Set an option |
-| exfil [-s | -f | -p <n>] [-m | -i | -d] filename | Start exfiltration of specified file |
+| exfil [-s \| -f \| -p <n>] [-m \| -i \| -d] filename | Start exfiltration of specified file |
 | exit, quit, close | Close exfilm8 |
 
 ##Exfil options
