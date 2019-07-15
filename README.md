@@ -1,6 +1,6 @@
-#exfilm8
+# exfilm8
 
-##Command and control commands
+## Command and control commands
 | Command       | Description   |
 |:------------- |:--------------|
 | rempwd | Print the current directory |
@@ -11,7 +11,7 @@
 | exfil [-s \| -f \| -p <n>] [-m \| -i \| -d] filename | Start exfiltration of specified file |
 | exit, quit, close | Close exfilm8 |
 
-##Exfil options
+## Exfil options
 | Option       | Description   |
 |:-------------|:--------------|
 | -s | Stealth mode, default |
@@ -21,7 +21,7 @@
 | -d | Send DNS packets only |
 | -i | Send ICMP packets only |
 
-##How to run
+## How to run
 1. python3 client.py
 2. python3 server.py
 
