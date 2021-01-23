@@ -1,5 +1,7 @@
 # exfilm8
 
+A tool to exfiltrate files stealthily, using DNS and ICMP packets.
+
 ## Command and control commands
 | Command       | Description   |
 |:------------- |:--------------|
